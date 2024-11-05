@@ -567,12 +567,12 @@ void mode_setting(aflcc_state_t *aflcc) {
 #ifndef AFL_CLANG_FLTO
   FATAL(
       "instrumentation mode LTO specified but LLVM support not available "
-      "(requires LLVM 13 or higher)");
+      "(requires LLVM 12 or higher)");
 #endif
 
   if (!aflcc->have_lto)
     FATAL(
-        "LTO mode is not available, please install LLVM 13+ and lld of the "
+        "LTO mode is not available, please install LLVM 12+ and lld of the "
         "same version and recompile AFL++");
 
   if (aflcc->lto_flag[0] != '-')

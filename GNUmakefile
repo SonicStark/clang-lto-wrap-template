@@ -320,7 +320,7 @@ ifdef TEST_MMAP
 endif
 
 .PHONY: all
-all:	test_x86 test_shm test_python ready afl-cc llvm
+all:	test_x86 test_shm test_python ready llvm
 	@echo
 	@echo
 	@echo Build Summary:

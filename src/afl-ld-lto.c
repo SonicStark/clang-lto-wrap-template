@@ -299,7 +299,7 @@ int main(int argc, char **argv) {
         "\n"
         "This is a helper application for afl-clang-lto.\n"
         "It is a wrapper around llvm's 'lld' in case afl-clang-lto cannot be "
-        "used.\n"
+        "used, e.g. some targets want a ld variant for LD that is not gcc/clang but ld.\n"
         "Note that the target still has to be compiled with -flto=full!\n"
         "You probably don't want to run this program directly but rather pass "
         "it as LD\nparameter to e.g. configure scripts.\n\n"

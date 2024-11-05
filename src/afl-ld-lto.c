@@ -64,6 +64,8 @@ static u8 be_quiet,                 /* Quiet mode (no stderr output)        */
     passthrough,                    /* AFL_LD_PASSTHROUGH - no link+optimize*/
     just_version;                   /* Just show version?                   */
 
+static u8 lto_save_temps;
+
 static u32 ld_param_cnt = 1;        /* Number of params to 'ld'             */
 
 /* Examine and modify parameters to pass to 'ld', 'llvm-link' and 'llmv-ar'.
@@ -85,7 +87,7 @@ static void edit_params(int argc, char **argv) {
 
       if (strstr(argv[i], "/afl-llvm-rt-lto.o") != NULL) rt_lto_present = 1;
       if (strstr(argv[i], "/afl-compiler-rt.o") != NULL) rt_present = 1;
-      if (strstr(argv[i], "/afl-llvm-lto-instr") != NULL) inst_present = 1;
+      if (strstr(argv[i], "SanitizerCoverageLTO") != NULL) inst_present = 1;
 
     }
 
@@ -227,10 +229,12 @@ static void edit_params(int argc, char **argv) {
 
       ld_params[ld_param_cnt++] = "--allow-multiple-definition";
 
+      if (lto_save_temps) { ld_params[ld_param_cnt++] = "--save-temps"; }
+
       if (!inst_present) {
 
-        ld_params[ld_param_cnt++] = alloc_printf(
-            "-mllvm=-load=%s/afl-llvm-lto-instrumentation.so", afl_path);
+        ld_params[ld_param_cnt++] =
+            alloc_printf("-mllvm=-load=%s/SanitizerCoverageLTO.so", afl_path);
 
       }
 
@@ -273,6 +277,7 @@ int main(int argc, char **argv) {
 
     be_quiet = 1;
 
+  if (getenv("AFL_LTO_SAVE_TEMPS")) lto_save_temps = 1;
   if (getenv("AFL_DEBUG") != NULL) debug = 1;
   if (getenv("AFL_PATH") != NULL) afl_path = getenv("AFL_PATH");
   if (getenv("AFL_LD_PASSTHROUGH") != NULL) passthrough = 1;
@@ -308,6 +313,7 @@ int main(int argc, char **argv) {
         "Environment variables:\n"
         "  AFL_LD_PASSTHROUGH   do not link+optimize == no instrumentation\n"
         "  AFL_REAL_LD          point to the real llvm 11 lld if necessary\n"
+        "  AFL_LTO_SAVE_TEMPS   save bitcode at different stages of LTO\n"
 
         "\nafl-ld-to was compiled with the fixed real 'ld' of %s and the "
         "binary path of %s\n\n",

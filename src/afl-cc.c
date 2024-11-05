@@ -182,6 +182,8 @@ typedef struct aflcc_state {
       have_rust_asanrt, have_asan, have_msan, have_ubsan, have_lsan, have_tsan,
       have_cfisan;
 
+  u8 lto_save_temps;
+
   // u8 *march_opt;
   u8  need_aflpplib;
   int passthrough;
@@ -335,6 +337,8 @@ void aflcc_state_init(aflcc_state_t *aflcc, u8 *argv0) {
     aflcc->plusplus_mode = 1;
 
   }
+
+  if (getenv("AFL_LTO_SAVE_TEMPS")) { aflcc->lto_save_temps = 1; }
 
   /* debug */
 
@@ -1287,6 +1291,8 @@ void add_lto_passes(aflcc_state_t *aflcc) {
 
   insert_param(aflcc, "-Wl,--allow-multiple-definition");
 
+  if (aflcc->lto_save_temps) { insert_param(aflcc, "-Wl,--save-temps"); }
+
 }
 
 /* Add params to link with libAFLDriver.a on request */
@@ -1680,6 +1686,7 @@ static void maybe_usage(aflcc_state_t *aflcc, int argc, char **argv) {
       if (aflcc->have_lto)
         SAYF(
             "\nLTO specific environment variables:\n"
+            "  AFL_LTO_SAVE_TEMPS: Save bitcode at different stages of LTO\n"
             "  AFL_LLVM_ALLOWLIST/AFL_LLVM_DENYLIST: enable "
             "instrument allow/\n"
             "    deny listing (selective instrumentation)\n"

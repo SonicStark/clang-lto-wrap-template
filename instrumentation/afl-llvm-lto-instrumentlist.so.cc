@@ -119,6 +119,10 @@ PreservedAnalyses AFLcheckIfInstrument::run(Module                &M,
 
   for (auto &F : M) {
 
+    if (debug)
+      DEBUGF("==== CLANG-LTO-WRAP ====\n'%s' at '%s'\n",
+             F.getName().str().c_str(), MNAME.c_str());
+
     if (F.size() < 1) continue;
 
     // fprintf(stderr, "F:%s\n", F.getName().str().c_str());

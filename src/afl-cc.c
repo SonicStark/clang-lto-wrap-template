@@ -615,7 +615,7 @@ void mode_notification(aflcc_state_t *aflcc) {
     SAYF(cCYA
          "afl-cc" VERSION cRST
          " by Michal Zalewski, Laszlo Szekeres, Marc Heuse - mode: %s-%s\n",
-         compiler_mode_2str(aflcc->compiler_mode), 
+         compiler_mode_2str(aflcc->compiler_mode),
          instrument_mode_2str(aflcc->instrument_mode));
 
   }
@@ -643,7 +643,7 @@ void add_real_argv0(aflcc_state_t *aflcc) {
 
       if (USE_BINDIR)
         snprintf(llvm_fullpath, sizeof(llvm_fullpath), "%s/clang++",
-                  LLVM_BINDIR);
+                 LLVM_BINDIR);
       else
         snprintf(llvm_fullpath, sizeof(llvm_fullpath), CLANGPP_BIN);
       alt_cxx = llvm_fullpath;
@@ -659,8 +659,7 @@ void add_real_argv0(aflcc_state_t *aflcc) {
     if (!alt_cc) {
 
       if (USE_BINDIR)
-        snprintf(llvm_fullpath, sizeof(llvm_fullpath), "%s/clang",
-                  LLVM_BINDIR);
+        snprintf(llvm_fullpath, sizeof(llvm_fullpath), "%s/clang", LLVM_BINDIR);
       else
         snprintf(llvm_fullpath, sizeof(llvm_fullpath), CLANG_BIN);
       alt_cc = llvm_fullpath;
@@ -1076,8 +1075,7 @@ param_st parse_linking_params(aflcc_state_t *aflcc, u8 *cur_argv, u8 scan,
 
   if (aflcc->lto_mode && !strncmp(cur_argv, "-flto=thin", 10)) {
 
-    FATAL(
-        "Cannot work with -flto=thin. Switch to -flto=full please!");
+    FATAL("Cannot work with -flto=thin. Switch to -flto=full please!");
 
   }
 

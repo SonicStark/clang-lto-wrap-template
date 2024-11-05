@@ -25,7 +25,6 @@
 #include "types.h"
 #include "debug.h"
 #include "alloc-inl.h"
-#include "llvm-alternative-coverage.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -515,40 +514,17 @@ void find_built_deps(aflcc_state_t *aflcc) {
 
   char *ptr = NULL;
 
-#if defined(__x86_64__) || defined(__i386__)
-  if ((ptr = find_object(aflcc, "afl-as")) != NULL) {
-
-  #ifndef __APPLE__
-    // on OSX clang masquerades as GCC
-    aflcc->have_gcc = 1;
-  #endif
-    aflcc->have_clang = 1;
-    ck_free(ptr);
-
-  }
-
-#endif
-
-  if ((ptr = find_object(aflcc, "SanitizerCoveragePCGUARD.so")) != NULL) {
-
-    aflcc->have_optimized_pcguard = 1;
-    ck_free(ptr);
-
-  }
-
 #if (LLVM_MAJOR >= 3)
 
   if ((ptr = find_object(aflcc, "SanitizerCoverageLTO.so")) != NULL) {
 
     aflcc->have_lto = 1;
-    ck_free(ptr);
-
-  }
-
-  if ((ptr = find_object(aflcc, "cmplog-routines-pass.so")) != NULL) {
-
     aflcc->have_llvm = 1;
     ck_free(ptr);
+
+  } else {
+
+    FATAL("Can't find any llvm pass for LTO mode!");
 
   }
 
@@ -557,13 +533,6 @@ void find_built_deps(aflcc_state_t *aflcc) {
 #ifdef __ANDROID__
   aflcc->have_llvm = 1;
 #endif
-
-  if ((ptr = find_object(aflcc, "afl-gcc-pass.so")) != NULL) {
-
-    aflcc->have_gcc_plugin = 1;
-    ck_free(ptr);
-
-  }
 
 #if !defined(__ANDROID__) && !defined(ANDROID)
   ptr = find_object(aflcc, "afl-compiler-rt.o");
@@ -1094,43 +1063,6 @@ void add_sanitizers(aflcc_state_t *aflcc, char **envp) {
 
 }
 
-/* Add params to enable LLVM SanCov, the native PCGUARD */
-void add_native_pcguard(aflcc_state_t *aflcc) {
-
-  /* If there is a rust ASan runtime on the command line, it is likely we're
-   * linking from rust and adding native flags requiring the sanitizer runtime
-   * will trigger native clang to add yet another runtime, causing linker
-   * errors. For now we shouldn't add instrumentation here, we're linking
-   * anyway.
-   */
-  if (aflcc->have_rust_asanrt) { return; }
-
-  /* If llvm-config doesn't figure out LLVM_MAJOR, just
-   go on anyway and let compiler complain if doesn't work. */
-
-#if LLVM_MAJOR > 0 && LLVM_MAJOR < 6
-  FATAL("pcguard instrumentation with pc-table requires LLVM 6.0.1+");
-#else
-  #if LLVM_MAJOR == 0
-  WARNF(
-      "pcguard instrumentation with pc-table requires LLVM 6.0.1+"
-      " otherwise the compiler will fail");
-  #endif
-  if (aflcc->instrument_opt_mode & INSTRUMENT_OPT_CODECOV) {
-
-    insert_param(aflcc,
-                 "-fsanitize-coverage=trace-pc-guard,bb,no-prune,pc-table");
-
-  } else {
-
-    insert_param(aflcc, "-fsanitize-coverage=trace-pc-guard,pc-table");
-
-  }
-
-#endif
-
-}
-
 /** About -fsanitize -----END----- **/
 
 /** Linking behaviors -----BEGIN----- **/
@@ -1145,8 +1077,7 @@ param_st parse_linking_params(aflcc_state_t *aflcc, u8 *cur_argv, u8 scan,
   if (aflcc->lto_mode && !strncmp(cur_argv, "-flto=thin", 10)) {
 
     FATAL(
-        "afl-clang-lto cannot work with -flto=thin. Switch to -flto=full or "
-        "use afl-clang-fast!");
+        "Cannot work with -flto=thin. Switch to -flto=full please!");
 
   }
 
@@ -1442,21 +1373,16 @@ void add_runtime(aflcc_state_t *aflcc) {
       case 0:
         if (!aflcc->shared_linking && !aflcc->partial_linking)
           insert_object(aflcc, "afl-compiler-rt.o", 0, 0);
-        if (aflcc->lto_mode) insert_object(aflcc, "afl-llvm-rt-lto.o", 0, 0);
         break;
 
       case 32:
         if (!aflcc->shared_linking && !aflcc->partial_linking)
           insert_object(aflcc, "afl-compiler-rt-32.o", 0, M32_ERR_MSG);
-        if (aflcc->lto_mode)
-          insert_object(aflcc, "afl-llvm-rt-lto-32.o", 0, M32_ERR_MSG);
         break;
 
       case 64:
         if (!aflcc->shared_linking && !aflcc->partial_linking)
           insert_object(aflcc, "afl-compiler-rt-64.o", 0, M64_ERR_MSG);
-        if (aflcc->lto_mode)
-          insert_object(aflcc, "afl-llvm-rt-lto-64.o", 0, M64_ERR_MSG);
         break;
 
     }
@@ -1523,21 +1449,6 @@ char *get_opt_level() {
 
 /* Add some miscellaneous params required by our instrumentation. */
 void add_misc_params(aflcc_state_t *aflcc) {
-
-  if (getenv("AFL_NO_BUILTIN") || getenv("AFL_LLVM_LAF_TRANSFORM_COMPARES") ||
-      getenv("AFL_LLVM_LAF_ALL") || getenv("AFL_LLVM_CMPLOG") ||
-      aflcc->lto_mode) {
-
-    insert_param(aflcc, "-fno-builtin-strcmp");
-    insert_param(aflcc, "-fno-builtin-strncmp");
-    insert_param(aflcc, "-fno-builtin-strcasecmp");
-    insert_param(aflcc, "-fno-builtin-strncasecmp");
-    insert_param(aflcc, "-fno-builtin-memcmp");
-    insert_param(aflcc, "-fno-builtin-bcmp");
-    insert_param(aflcc, "-fno-builtin-strstr");
-    insert_param(aflcc, "-fno-builtin-strcasestr");
-
-  }
 
   if (!aflcc->have_pic) { insert_param(aflcc, "-fPIC"); }
 
@@ -1734,123 +1645,16 @@ static void maybe_usage(aflcc_state_t *aflcc, int argc, char **argv) {
 
     SAYF(
         "\n"
-        "afl-cc/afl-c++ [options]\n"
-        "\n"
-        "This is a helper application for afl-fuzz. It serves as a drop-in "
+        "This is a helper application which serves as a drop-in "
         "replacement\n"
-        "for gcc and clang, letting you recompile third-party code with the "
+        "for clang LTO mode, letting you recompile third-party code with the "
         "required\n"
-        "runtime instrumentation. A common use pattern would be one of the "
-        "following:\n\n"
-
-        "  CC=afl-cc CXX=afl-c++ ./configure --disable-shared\n"
-        "  cmake -DCMAKE_C_COMPILERC=afl-cc -DCMAKE_CXX_COMPILER=afl-c++ .\n"
-        "  CC=afl-cc CXX=afl-c++ meson\n\n");
-
-    SAYF(
-        "                                       |------------- FEATURES "
-        "-------------|\n"
-        "MODES:                                  NCC PERSIST DICT   LAF "
-        "CMPLOG SELECT\n"
-        "  [LLVM] LLVM:             %s%s\n"
-        "      PCGUARD              %s yes yes     module yes yes    "
-        "yes\n"
-        "      NATIVE               AVAILABLE    no  yes     no     no  "
-        "part.  yes\n"
-        "      CLASSIC              %s no  yes     module yes yes    "
-        "yes\n"
-        "        - NORMAL\n"
-        "        - CALLER\n"
-        "        - CTX\n"
-        "        - NGRAM-{2-16}\n"
-        "  [LTO] LLVM LTO:          %s%s\n"
-        "      PCGUARD              DEFAULT      yes yes     yes    yes yes "
-        "   yes\n"
-        "      CLASSIC                           yes yes     yes    yes yes "
-        "   yes\n"
-        "  [GCC_PLUGIN] gcc plugin: %s%s\n"
-        "      CLASSIC              DEFAULT      no  yes     no     no  no     "
-        "yes\n"
-        "  [GCC/CLANG] simple gcc/clang: %s%s\n"
-        "      CLASSIC              DEFAULT      no  no      no     no  no     "
-        "no\n\n",
-        aflcc->have_llvm ? "AVAILABLE   " : "unavailable!",
-        aflcc->compiler_mode == LLVM ? " [SELECTED]" : "",
-        aflcc->have_llvm ? "AVAILABLE   " : "unavailable!",
-        aflcc->have_llvm ? "AVAILABLE   " : "unavailable!",
-        aflcc->have_lto ? "AVAILABLE" : "unavailable!",
-        aflcc->compiler_mode == LTO ? " [SELECTED]" : "",
-        aflcc->have_gcc_plugin ? "AVAILABLE" : "unavailable!",
-        aflcc->compiler_mode == GCC_PLUGIN ? " [SELECTED]" : "",
-        aflcc->have_gcc && aflcc->have_clang
-            ? "AVAILABLE"
-            : (aflcc->have_gcc
-                   ? "GCC ONLY "
-                   : (aflcc->have_clang ? "CLANG ONLY" : "unavailable!")),
-        (aflcc->compiler_mode == GCC || aflcc->compiler_mode == CLANG)
-            ? " [SELECTED]"
-            : "");
-
-    SAYF(
-        "Modes:\n"
-        "  To select the compiler mode use a symlink version (e.g. "
-        "afl-clang-fast), set\n"
-        "  the environment variable AFL_CC_COMPILER to a mode (e.g. LLVM) or "
-        "use the\n"
-        "  command line parameter --afl-MODE (e.g. --afl-llvm). If none is "
-        "selected,\n"
-        "  afl-cc will select the best available (LLVM -> GCC_PLUGIN -> GCC).\n"
-        "  The best is LTO but it often needs RANLIB and AR settings outside "
-        "of afl-cc.\n\n");
-
-#if LLVM_MAJOR >= 11 || (LLVM_MAJOR == 10 && LLVM_MINOR > 0)
-  #define NATIVE_MSG                                                   \
-    "  LLVM-NATIVE:  use llvm's native PCGUARD instrumentation (less " \
-    "performant)\n"
-#else
-  #define NATIVE_MSG ""
-#endif
-
-    SAYF(
-        "Sub-Modes: (set via env AFL_LLVM_INSTRUMENT, afl-cc selects the best "
-        "available)\n"
-        "  PCGUARD: Dominator tree instrumentation (best!) (README.llvm.md)\n"
-
-        NATIVE_MSG
-
-        "  CLASSIC: decision target instrumentation (README.llvm.md)\n"
-        "  CALLER:  CLASSIC + single callee context "
-        "(instrumentation/README.ctx.md)\n"
-        "  CTX:     CLASSIC + full callee context "
-        "(instrumentation/README.ctx.md)\n"
-        "  NGRAM-x: CLASSIC + previous path "
-        "((instrumentation/README.ngram.md)\n\n");
-
-#undef NATIVE_MSG
-
-    SAYF(
-        "Features: (see documentation links)\n"
-        "  NCC:    non-colliding coverage [automatic] (that is an amazing "
-        "thing!)\n"
-        "          (instrumentation/README.lto.md)\n"
-        "  PERSIST: persistent mode support [code] (huge speed increase!)\n"
-        "          (instrumentation/README.persistent_mode.md)\n"
-        "  DICT:   dictionary in the target [yes=automatic or LLVM module "
-        "pass]\n"
-        "          (instrumentation/README.lto.md + "
-        "instrumentation/README.llvm.md)\n"
-        "  LAF:    comparison splitting [env] "
-        "(instrumentation/README.laf-intel.md)\n"
-        "  CMPLOG: input2state exploration [env] "
-        "(instrumentation/README.cmplog.md)\n"
-        "  SELECT: selective instrumentation (allow/deny) on filename or "
-        "function [env]\n"
-        "          (instrumentation/README.instrument_list.md)\n\n");
+        "runtime instrumentation.\n\n");
 
     if (argc < 2 || strncmp(argv[1], "-hh", 3)) {
 
       SAYF(
-          "To see all environment variables for the configuration of afl-cc "
+          "To see all environment variables for the configuration "
           "use \"-hh\".\n");
 
     } else {
@@ -1861,14 +1665,10 @@ static void maybe_usage(aflcc_state_t *aflcc, int argc, char **argv) {
           "  AFL_CXX: path to the C++ compiler to use\n"
           "  AFL_DEBUG: enable developer debugging output\n"
           "  AFL_DONT_OPTIMIZE: disable optimization instead of -O3\n"
-          "  AFL_NO_BUILTIN: no builtins for string compare functions (for "
-          "libtokencap.so)\n"
           "  AFL_NOOPT: behave like a normal compiler (to pass configure "
           "tests)\n"
           "  AFL_PATH: path to instrumenting pass and runtime  "
           "(afl-compiler-rt.*o)\n"
-          "  AFL_IGNORE_UNKNOWN_ENVS: don't warn on unknown env vars\n"
-          "  AFL_INST_RATIO: percentage of branches to instrument\n"
           "  AFL_QUIET: suppress verbose output\n"
           "  AFL_HARDEN: adds code hardening to catch memory bugs\n"
           "  AFL_USE_ASAN: activate address sanitizer\n"
@@ -1878,106 +1678,18 @@ static void maybe_usage(aflcc_state_t *aflcc, int argc, char **argv) {
           "  AFL_USE_TSAN: activate thread sanitizer\n"
           "  AFL_USE_LSAN: activate leak-checker sanitizer\n");
 
-      if (aflcc->have_gcc_plugin)
-        SAYF(
-            "\nGCC Plugin-specific environment variables:\n"
-            "  AFL_GCC_CMPLOG: log operands of comparisons (RedQueen mutator)\n"
-            "  AFL_GCC_DISABLE_VERSION_CHECK: disable GCC plugin version "
-            "control\n"
-            "  AFL_GCC_OUT_OF_LINE: disable inlined instrumentation\n"
-            "  AFL_GCC_SKIP_NEVERZERO: do not skip zero on trace counters\n"
-            "  AFL_GCC_INSTRUMENT_FILE: enable selective instrumentation by "
-            "filename\n");
-
-#if LLVM_MAJOR >= 9
-  #define COUNTER_BEHAVIOUR \
-    "  AFL_LLVM_SKIP_NEVERZERO: do not skip zero on trace counters\n"
-#else
-  #define COUNTER_BEHAVIOUR \
-    "  AFL_LLVM_NOT_ZERO: use cycling trace counters that skip zero\n"
-#endif
-      if (aflcc->have_llvm)
-        SAYF(
-            "\nLLVM/LTO/afl-clang-fast/afl-clang-lto specific environment "
-            "variables:\n"
-            "  AFL_LLVM_THREADSAFE_INST: instrument with thread safe counters, "
-            "disables neverzero\n"
-
-            COUNTER_BEHAVIOUR
-
-            "  AFL_LLVM_DICT2FILE: generate an afl dictionary based on found "
-            "comparisons\n"
-            "  AFL_LLVM_DICT2FILE_NO_MAIN: skip parsing main() for the "
-            "dictionary\n"
-            "  AFL_LLVM_INJECTIONS_ALL: enables all injections hooking\n"
-            "  AFL_LLVM_INJECTIONS_SQL: enables SQL injections hooking\n"
-            "  AFL_LLVM_INJECTIONS_LDAP: enables LDAP injections hooking\n"
-            "  AFL_LLVM_INJECTIONS_XSS: enables XSS injections hooking\n"
-            "  AFL_LLVM_LAF_ALL: enables all LAF splits/transforms\n"
-            "  AFL_LLVM_LAF_SPLIT_COMPARES: enable cascaded comparisons\n"
-            "  AFL_LLVM_LAF_SPLIT_COMPARES_BITW: size limit (default 8)\n"
-            "  AFL_LLVM_LAF_SPLIT_SWITCHES: cascaded comparisons on switches\n"
-            "  AFL_LLVM_LAF_SPLIT_FLOATS: cascaded comparisons on floats\n"
-            "  AFL_LLVM_LAF_TRANSFORM_COMPARES: cascade comparisons for string "
-            "functions\n"
-            "  AFL_LLVM_ALLOWLIST/AFL_LLVM_DENYLIST: enable "
-            "instrument allow/\n"
-            "    deny listing (selective instrumentation)\n");
-
-      if (aflcc->have_llvm)
-        SAYF(
-            "  AFL_LLVM_CMPLOG: log operands of comparisons (RedQueen "
-            "mutator)\n"
-            "  AFL_LLVM_INSTRUMENT: set instrumentation mode:\n"
-            "    CLASSIC, PCGUARD, LTO, GCC, CLANG, CALLER, CTX, NGRAM-2 "
-            "..-16\n"
-            " You can also use the old environment variables instead:\n"
-            "  AFL_LLVM_USE_TRACE_PC: use LLVM trace-pc-guard instrumentation\n"
-            "  AFL_LLVM_CALLER: use single context sensitive coverage (for "
-            "CLASSIC)\n"
-            "  AFL_LLVM_CTX: use full context sensitive coverage (for "
-            "CLASSIC)\n"
-            "  AFL_LLVM_NGRAM_SIZE: use ngram prev_loc count coverage (for "
-            "CLASSIC)\n"
-            "  AFL_LLVM_NO_RPATH: disable rpath setting for custom LLVM "
-            "locations\n");
-
 #ifdef AFL_CLANG_FLTO
       if (aflcc->have_lto)
         SAYF(
-            "\nLTO/afl-clang-lto specific environment variables:\n"
-            "  AFL_LLVM_MAP_ADDR: use a fixed coverage map address (speed), "
-            "e.g. "
-            "0x10000\n"
-            "  AFL_LLVM_DOCUMENT_IDS: write all edge IDs and the corresponding "
-            "functions\n"
-            "    into this file (LTO mode)\n"
-            "  AFL_LLVM_LTO_CALLER: activate CALLER/CTX instrumentation\n"
-            "  AFL_LLVM_LTO_CALLER_DEPTH: skip how many empty functions\n"
-            "  AFL_LLVM_LTO_DONTWRITEID: don't write the highest ID used to a "
-            "global var\n"
-            "  AFL_LLVM_LTO_STARTID: from which ID to start counting from for "
-            "a bb\n"
+            "\nLTO specific environment variables:\n"
+            "  AFL_LLVM_ALLOWLIST/AFL_LLVM_DENYLIST: enable "
+            "instrument allow/\n"
+            "    deny listing (selective instrumentation)\n"
             "  AFL_REAL_LD: use this lld linker instead of the compiled in "
-            "path\n"
-            "  AFL_LLVM_LTO_SKIPINIT: don't inject initialization code "
-            "(used in WAFL mode)\n"
-            "If anything fails - be sure to read README.lto.md!\n");
+            "path\n");
 #endif
 
-      SAYF(
-          "\nYou can supply --afl-noopt to not instrument, like AFL_NOOPT. "
-          "(this is helpful\n"
-          "in some build systems if you do not want to instrument "
-          "everything.\n");
-
     }
-
-    SAYF(
-        "\nFor any information on the available instrumentations and options "
-        "please \n"
-        "consult the README.md, especially section 3.1 about instrumenting "
-        "targets.\n\n");
 
 #if (LLVM_MAJOR >= 3)
     if (aflcc->have_lto)
@@ -1987,26 +1699,7 @@ static void maybe_usage(aflcc_state_t *aflcc, int argc, char **argv) {
            LLVM_BINDIR);
 #endif
 
-#ifdef USEMMAP
-  #if !defined(__HAIKU__)
-    SAYF("Compiled with shm_open support.\n");
-  #else
-    SAYF("Compiled with shm_open support (adds -lrt when linking).\n");
-  #endif
-#else
-    SAYF("Compiled with shmat support.\n");
-#endif
     SAYF("\n");
-
-    SAYF(
-        "Do not be overwhelmed :) afl-cc uses good defaults if no options are "
-        "selected.\n"
-        "Read the documentation for FEATURES though, all are good but few are "
-        "defaults.\n"
-        "Recommended is afl-clang-lto with AFL_LLVM_CMPLOG or afl-clang-fast "
-        "with\n"
-        "AFL_LLVM_CMPLOG and "
-        "AFL_LLVM_DICT2FILE+AFL_LLVM_DICT2FILE_NO_MAIN.\n\n");
 
     if (LLVM_MAJOR < 13) {
 
@@ -2326,38 +2019,27 @@ static void edit_params(aflcc_state_t *aflcc, u32 argc, char **argv,
   // prevent unnecessary build errors
   insert_param(aflcc, "-Wno-unused-command-line-argument");
 
-  {
+  if (aflcc->lto_mode && aflcc->have_instr_env) {
 
-    if (aflcc->lto_mode && aflcc->have_instr_env) {
-
-      load_llvm_pass(aflcc, "afl-llvm-lto-instrumentlist.so");
-
-    }
-
-    if (getenv("AFL_LLVM_DICT2FILE")) {
-
-      load_llvm_pass(aflcc, "afl-llvm-dict2file.so");
-
-    }
-
-    // #if LLVM_MAJOR >= 13
-    //     // Use the old pass manager in LLVM 14 which the AFL++ passes still
-    //     use. insert_param(aflcc, "-flegacy-pass-manager");
-    // #endif
-
-
-    insert_param(aflcc, aflcc->lto_flag);
-
-    if (!aflcc->have_c) {
-
-      add_lto_linker(aflcc);
-      add_lto_passes(aflcc);
-
-    }
-
-    // insert_param(aflcc, "-Qunused-arguments");
+    load_llvm_pass(aflcc, "afl-llvm-lto-instrumentlist.so");
 
   }
+
+  // #if LLVM_MAJOR >= 13
+  //     // Use the old pass manager in LLVM 14 which the AFL++ passes still
+  //     use. insert_param(aflcc, "-flegacy-pass-manager");
+  // #endif
+
+  insert_param(aflcc, aflcc->lto_flag);
+
+  if (!aflcc->have_c) {
+
+    add_lto_linker(aflcc);
+    add_lto_passes(aflcc);
+
+  }
+
+  // insert_param(aflcc, "-Qunused-arguments");
 
   /* Inspect the command line parameters. */
 

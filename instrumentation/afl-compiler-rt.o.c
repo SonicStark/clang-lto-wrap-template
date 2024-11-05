@@ -34,7 +34,6 @@ __attribute__((weak)) void __sanitizer_symbolize_pc(void *, const char *fmt,
 #include "config.h"
 #include "types.h"
 #include "cmplog.h"
-#include "llvm-alternative-coverage.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash.h"

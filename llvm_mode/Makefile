@@ -39,6 +39,8 @@ LLVM_MAJOR            := $(firstword $(subst ., ,$(LLVMVER)))
 LLVM_MINOR            := $(firstword $(subst ., ,$(subst $(LLVM_MAJOR).,,$(LLVMVER))))
 LLVM_TOO_NEW          := $(shell test $(LLVM_MAJOR) -gt $(LLVM_TOO_NEW_DEFAULT) && echo 1 || echo 0)
 LLVM_TOO_OLD          := $(shell test $(LLVM_MAJOR) -lt $(LLVM_TOO_OLD_DEFAULT) && echo 1 || echo 0)
+LLVM_NEW_API          := $(shell test $(LLVM_MAJOR) -ge 10 && echo 1 || echo 0)
+LLVM_NEWER_API        := $(shell test $(LLVM_MAJOR) -ge 16 && echo 1 || echo 0)
 
 ifeq "$(LLVM_TOO_NEW)" "1"
   $(error [X] You are using an in-development llvm version - this might break llvm_mode!)
@@ -46,6 +48,18 @@ endif
 
 ifeq "$(LLVM_TOO_OLD)" "1"
   $(error [X] You are using an outdated LLVM version!)
+endif
+
+LLVM_STDCXX := gnu++11
+
+ifeq "$(LLVM_NEW_API)" "1"
+  $(info [+] llvm_mode detected llvm 10+, enabling c++14)
+  LLVM_STDCXX = c++14
+endif
+
+ifeq "$(LLVM_NEWER_API)" "1"
+  $(info [+] llvm_mode detected llvm 16+, enabling c++17)
+  LLVM_STDCXX = c++17
 endif
 
 CC         = $(LLVM_BINDIR)/clang
@@ -141,7 +155,7 @@ CFLAGS      += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 CXXFLAGS    ?= -O3 -funroll-loops
 CXXFLAGS    += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
                -DVERSION=\"$(VERSION)\" -Wno-variadic-macros \
-			   $(AFL_CLANG_DEBUG_PREFIX)
+               -std=$(LLVM_STDCXX) $(AFL_CLANG_DEBUG_PREFIX)
 
 # Mark nodelete to work around unload bug in upstream LLVM 5.0+
 CLANG_CFL    = `$(LLVM_CONFIG) --cxxflags` -Wl,-znodelete -fno-rtti -fno-exceptions -fpic $(CXXFLAGS)

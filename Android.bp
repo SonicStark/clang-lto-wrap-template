@@ -10,38 +10,9 @@ cc_defaults {
     "-Wno-unused-function",
     "-Wno-format",
     "-Wno-user-defined-warnings",
-    "-DUSE_TRACE_PC=1",
     "-DBIN_PATH=\"out/host/linux-x86/bin\"",
     "-DDOC_PATH=\"out/host/linux-x86/shared/doc/afl\"",
     "-D__USE_GNU",
-  ],
-}
-
-cc_binary {
-  name: "afl-fuzz",
-  static_executable: true,
-  host_supported: true,
-
-  defaults: [
-    "afl-defaults",
-  ],
-
-  srcs: [
-    "afl-fuzz.c",
-  ],
-}
-
-cc_binary {
-  name: "afl-showmap",
-  static_executable: true,
-  host_supported: true,
-
-  defaults: [
-    "afl-defaults",
-  ],
-
-  srcs: [
-    "afl-showmap.c",
   ],
 }
 
@@ -56,34 +27,6 @@ cc_binary {
 
   srcs: [
     "afl-tmin.c",
-  ],
-}
-
-cc_binary {
-  name: "afl-analyze",
-  static_executable: true,
-  host_supported: true,
-
-  defaults: [
-    "afl-defaults",
-  ],
-
-  srcs: [
-    "afl-analyze.c",
-  ],
-}
-
-cc_binary {
-  name: "afl-gotcpu",
-  static_executable: true,
-  host_supported: true,
-
-  defaults: [
-    "afl-defaults",
-  ],
-
-  srcs: [
-    "afl-gotcpu.c",
   ],
 }
 

@@ -44,6 +44,9 @@ static u8*  obj_path;               /* Path to runtime libraries         */
 static u8** cc_params;              /* Parameters passed to the real CC  */
 static u32  cc_par_cnt = 1;         /* Param count, including argv0      */
 
+static u8  *lto_flag;
+static u8   lto_mode = 0;           /* If LTO mode used                  */
+static u8   lto_save_temps = 0;     /* If use --save-temps in LTO mode   */
 
 /* Try to find the runtime libraries. If that fails, abort. */
 
@@ -103,6 +106,8 @@ static void find_obj(u8* argv0) {
 
 static void edit_params(u32 argc, char** argv) {
 
+  u8 have_c = 0, have_e = 0, non_dash = 0;
+  u8 shared_linking = 0, partial_linking = 0;
   u8 fortify_set = 0, asan_set = 0, x_set = 0, bit_mode = 0;
   u8 *name;
 
@@ -119,15 +124,11 @@ static void edit_params(u32 argc, char** argv) {
     cc_params[0] = alt_cc ? alt_cc : (u8*)"clang";
   }
 
-  cc_params[cc_par_cnt++] = "-Xclang";
-  cc_params[cc_par_cnt++] = "-load";
-  cc_params[cc_par_cnt++] = "-Xclang";
-  cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-pass.so", obj_path);
+  u32 argc_cp = argc;
+  char **argv_cp = argv;
 
-  cc_params[cc_par_cnt++] = "-Qunused-arguments";
-
-  while (--argc) {
-    u8* cur = *(++argv);
+  while (--argc_cp) {
+    u8* cur = *(++argv_cp);
 
     if (!strcmp(cur, "-m32")) bit_mode = 32;
     if (!strcmp(cur, "armv7a-linux-androideabi")) bit_mode = 32;
@@ -135,13 +136,114 @@ static void edit_params(u32 argc, char** argv) {
 
     if (!strcmp(cur, "-x")) x_set = 1;
 
+    if (!strcmp(cur, "-E")) have_e = 1;
+    if (!strcmp(cur, "-c")) have_c = 1;
+    if (cur[0] != '-')      non_dash = 1;
+
+    if (!strcmp(cur, "-shared") || !strcmp(cur, "-dynamiclib"))
+      shared_linking = 1;
+  
+    if (!strcmp(cur, "-Wl,-r") || !strcmp(cur, "-Wl,-i") ||
+        !strcmp(cur, "-Wl,--relocatable") ||
+        !strcmp(cur, "-r") || !strcmp(cur, "--relocatable"))
+      partial_linking = 1;
+
     if (!strcmp(cur, "-fsanitize=address") ||
         !strcmp(cur, "-fsanitize=memory")) asan_set = 1;
 
     if (strstr(cur, "FORTIFY_SOURCE")) fortify_set = 1;
 
+  }
+
+  if (lto_mode) {
+
+    cc_params[cc_par_cnt++] = lto_flag;
+
+    if (!have_c) {
+
+      /* linker flags for LTO */
+
+      unsetenv("AFL_LD");
+      unsetenv("AFL_LD_CALLER");
+
+      u8 *ld_path = NULL;
+      if (getenv("AFL_REAL_LD")) {
+
+        ld_path = ck_strdup(getenv("AFL_REAL_LD"));
+
+      } else {
+
+        ld_path = ck_strdup(AFL_REAL_LD);
+
+      }
+
+      if (!*ld_path) {
+
+        ck_free(ld_path);
+        ld_path = strdup("ld.lld");
+
+      }
+
+#if defined(AFL_CLANG_LDPATH) && LLVM_MAJOR >= 12
+      cc_params[cc_par_cnt++] = alloc_printf("--ld-path=%s", ld_path);
+#else
+      cc_params[cc_par_cnt++] = alloc_printf("-fuse-ld=%s", ld_path);
+#endif
+      free(ld_path);
+
+      /* load passes for LTO */
+
+#if defined(AFL_CLANG_LDPATH) && LLVM_MAJOR >= 15
+      // The NewPM implementation only works fully since LLVM 15.
+      cc_params[cc_par_cnt++] = alloc_printf("-Wl,--load-pass-plugin=%s/afl-llvm-pass.so", obj_path);
+#elif defined(AFL_CLANG_LDPATH) && LLVM_MAJOR >= 13
+      cc_params[cc_par_cnt++] = "-Wl,--lto-legacy-pass-manager";
+      cc_params[cc_par_cnt++] = alloc_printf("-Wl,-mllvm=-load=%s/afl-llvm-pass.so", obj_path);
+#else
+      cc_params[cc_par_cnt++] = "-fno-experimental-new-pass-manager";
+      cc_params[cc_par_cnt++] = alloc_printf("-Wl,-mllvm=-load=%s/afl-llvm-pass.so", obj_path);
+#endif
+      cc_params[cc_par_cnt++] = "-Wl,--allow-multiple-definition";
+
+      /* AFL_LTO_SAVE_TEMPS */
+
+      if (lto_save_temps)
+        cc_params[cc_par_cnt++] = "-Wl,--save-temps";
+
+    }
+
+  } else {
+
+#if LLVM_MAJOR >= 11                                /* use new pass manager */
+  #if LLVM_MAJOR < 16
+    cc_params[cc_par_cnt++] = "-fexperimental-new-pass-manager";
+  #endif
+    cc_params[cc_par_cnt++] = alloc_printf("-fpass-plugin=%s/afl-llvm-pass.so", obj_path);
+#else
+    cc_params[cc_par_cnt++] = "-Xclang";
+    cc_params[cc_par_cnt++] = "-load";
+    cc_params[cc_par_cnt++] = "-Xclang";
+    cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-pass.so", obj_path);
+#endif
+
+  }
+
+  cc_params[cc_par_cnt++] = "-Qunused-arguments";
+  cc_params[cc_par_cnt++] = "-Wno-unused-command-line-argument";
+
+  while (--argc) {
+    u8* cur = *(++argv);
+
     if (!strcmp(cur, "-Wl,-z,defs") ||
-        !strcmp(cur, "-Wl,--no-undefined")) continue;
+        !strcmp(cur, "-Wl,--no-undefined") ||
+        !strcmp(cur, "-Wl,-no-undefined") ||
+        !strcmp(cur, "--no-undefined")) continue;
+
+    if (!strncmp(cur, "-fuse-ld=", 9) ||
+        !strncmp(cur, "--ld-path=", 10)) continue;
+
+    if (lto_mode && !strncmp(cur, "-flto=thin", 10))
+      FATAL("LTO mode cannot work with -flto=thin.");
 
     cc_params[cc_par_cnt++] = cur;
 
@@ -255,6 +357,14 @@ static void edit_params(u32 argc, char** argv) {
     cc_params[cc_par_cnt++] = "none";
   }
 
+  if (have_e || have_c || !non_dash || 
+      shared_linking || partial_linking) {
+
+    cc_params[cc_par_cnt] = NULL;
+    return;
+
+  }
+
 #ifndef __ANDROID__
   switch (bit_mode) {
 
@@ -299,24 +409,34 @@ int main(int argc, char** argv) {
   if (argc < 2) {
 
     SAYF("\n"
-         "This is a helper application for afl-fuzz. It serves as a drop-in replacement\n"
+         "This serves as a drop-in replacement\n"
          "for clang, letting you recompile third-party code with the required runtime\n"
-         "instrumentation. A common use pattern would be one of the following:\n\n"
-
-         "  CC=%s/afl-clang-fast ./configure\n"
-         "  CXX=%s/afl-clang-fast++ ./configure\n\n"
-
-         "In contrast to the traditional afl-clang tool, this version is implemented as\n"
-         "an LLVM pass and tends to offer improved performance with slow programs.\n\n"
+         "instrumentation.\n\n"
 
          "You can specify custom next-stage toolchain via AFL_CC and AFL_CXX. Setting\n"
-         "AFL_HARDEN enables hardening optimizations in the compiled code.\n\n",
-         BIN_PATH, BIN_PATH);
+         "AFL_HARDEN enables hardening optimizations in the compiled code.\n\n");
 
     exit(1);
 
   }
 
+  if (getenv("AFL_LTO_ENABLE")) {
+
+    lto_mode = 1;
+    lto_flag = AFL_CLANG_FLTO;
+  
+    if (lto_flag[0] != '-')
+      FATAL(
+        "Using LTO mode is not possible because Makefile magic did not "
+        "identify the correct -flto flag");
+
+    if (getenv("AFL_LTO_SAVE_TEMPS")) { 
+
+      lto_save_temps = 1; 
+
+    }
+
+  }
 
 #ifndef __ANDROID__
   find_obj(argv[0]);

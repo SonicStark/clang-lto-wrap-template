@@ -38,17 +38,61 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "llvm/ADT/Statistic.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Config/llvm-config.h"
+#if LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR < 5
+typedef long double max_align_t;
+#endif
+
+#if LLVM_VERSION_MAJOR >= 16
+// None becomes deprecated
+// the standard std::nullopt_t is recommended instead
+// from C++17 and onwards.
+constexpr std::nullopt_t None = std::nullopt;
+#endif
+
+#include "llvm/Pass.h"
+
+#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
+  #include "llvm/Passes/PassPlugin.h"
+  #include "llvm/Passes/PassBuilder.h"
+  #include "llvm/IR/PassManager.h"
+#else
+  #include "llvm/IR/LegacyPassManager.h"
+  #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#endif
+
 #include "llvm/IR/Module.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/IRBuilder.h"
+
+#if LLVM_VERSION_MAJOR >= 4 || \
+    (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR > 4)
+  #include "llvm/IR/DebugInfo.h"
+  #include "llvm/IR/CFG.h"
+#else
+  #include "llvm/DebugInfo.h"
+  #include "llvm/Support/CFG.h"
+#endif
+
 #include "llvm/Support/Debug.h"
-#include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 
 using namespace llvm;
 
 namespace {
 
+#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
+  class AFLCoverage : public PassInfoMixin<AFLCoverage> {
+
+    public:
+      AFLCoverage() {}
+
+      PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
+  
+  };
+
+#else
   class AFLCoverage : public ModulePass {
 
     public:
@@ -63,14 +107,69 @@ namespace {
       // }
 
   };
+#endif
+
+  void AFLDumpBC(Module &M) {
+
+    char *ptr;
+
+    if ((ptr = getenv("AFL_DUMP_BC")) != NULL) {
+      std::string BcDmpPth(ptr);
+      BcDmpPth += ".";
+      BcDmpPth += M.getSourceFileName().substr(0,8);
+      BcDmpPth += ".";
+      BcDmpPth += std::to_string((unsigned int)getpid());
+      BcDmpPth += ".bc";
+      std::error_code ec_;
+      std::unique_ptr<raw_fd_ostream> BcDmpDst = 
+        std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, 0);
+    
+      if (ec_) {
+        WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
+      } else {
+        WriteBitcodeToFile(M, *BcDmpDst);
+        BcDmpDst->close();
+      }
+    }
+  };
 
 }
 
 
+#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
+extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+llvmGetPassPluginInfo() {
+
+  return {LLVM_PLUGIN_API_VERSION, "AFLCoverage", "v0.1",
+          /* lambda to insert our pass into the pass pipeline. */
+          [](PassBuilder &PB) {
+
+    #if LLVM_VERSION_MAJOR <= 13
+            using OptimizationLevel = typename PassBuilder::OptimizationLevel;
+    #endif
+            PB.registerOptimizerLastEPCallback(
+                [](ModulePassManager &MPM, OptimizationLevel OL) {
+
+                  MPM.addPass(AFLCoverage());
+
+                });
+
+          }};
+
+}
+
+#else
+
 char AFLCoverage::ID = 0;
+#endif
 
+#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
+PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
 
+#else
 bool AFLCoverage::runOnModule(Module &M) {
+
+#endif
 
   LLVMContext &C = M.getContext();
 
@@ -86,6 +185,8 @@ bool AFLCoverage::runOnModule(Module &M) {
     SAYF(cCYA "afl-llvm-pass " cBRI VERSION cRST " by <lszekeres@google.com>\n");
 
   } else be_quiet = 1;
+
+  AFLDumpBC(M);
 
   /* Decide instrumentation ratio */
 
@@ -131,20 +232,36 @@ bool AFLCoverage::runOnModule(Module &M) {
 
       /* Load prev_loc */
 
-      LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc);
+      LoadInst *PrevLoc = IRB.CreateLoad(
+#if LLVM_VERSION_MAJOR >= 14
+          IRB.getInt32Ty(),
+#endif
+          AFLPrevLoc);
       PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());
 
       /* Load SHM pointer */
 
-      LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
+      LoadInst *MapPtr = IRB.CreateLoad(
+#if LLVM_VERSION_MAJOR >= 14
+          PointerType::get(Int8Ty, 0),
+#endif
+          AFLMapPtr);
       MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *MapPtrIdx =
-          IRB.CreateGEP(MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
+          IRB.CreateGEP(
+#if LLVM_VERSION_MAJOR >= 14
+            Int8Ty,
+#endif
+            MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
 
       /* Update bitmap */
 
-      LoadInst *Counter = IRB.CreateLoad(MapPtrIdx);
+      LoadInst *Counter = IRB.CreateLoad(
+#if LLVM_VERSION_MAJOR >= 14
+          IRB.getInt8Ty(),
+#endif
+          MapPtrIdx);
       Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *Incr = IRB.CreateAdd(Counter, ConstantInt::get(Int8Ty, 1));
       IRB.CreateStore(Incr, MapPtrIdx)
@@ -172,11 +289,15 @@ bool AFLCoverage::runOnModule(Module &M) {
 
   }
 
+#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
+  return PreservedAnalyses();
+#else
   return true;
+#endif
 
 }
 
-
+#if LLVM_VERSION_MAJOR < 11                         /* use old pass manager */
 static void registerAFLPass(const PassManagerBuilder &,
                             legacy::PassManagerBase &PM) {
 
@@ -184,9 +305,9 @@ static void registerAFLPass(const PassManagerBuilder &,
 
 }
 
-
 static RegisterStandardPasses RegisterAFLPass(
     PassManagerBuilder::EP_ModuleOptimizerEarly, registerAFLPass);
 
 static RegisterStandardPasses RegisterAFLPass0(
     PassManagerBuilder::EP_EnabledOnOptLevel0, registerAFLPass);
+#endif

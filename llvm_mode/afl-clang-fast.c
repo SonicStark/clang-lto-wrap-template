@@ -163,6 +163,7 @@ static void edit_params(u32 argc, char** argv) {
 
       /* linker flags for LTO */
 
+      //TODO: compat with afl-ld-lto from AFL++
       unsetenv("AFL_LD");
       unsetenv("AFL_LD_CALLER");
 

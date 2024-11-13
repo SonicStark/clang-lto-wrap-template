@@ -23,7 +23,7 @@ BIN_PATH     = $(PREFIX)/bin
 VERSION     = $(shell grep '^\#define VERSION ' ../config.h | cut -d '"' -f2)
 
 override LLVM_TOO_NEW_DEFAULT := 18
-override LLVM_TOO_OLD_DEFAULT := 9
+override LLVM_TOO_OLD_DEFAULT := 11
 
 LLVM_CONFIG ?= llvm-config
 

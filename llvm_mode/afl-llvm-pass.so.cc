@@ -112,7 +112,7 @@ void SVFAnalysis::DumpBC(Module &M) {
     } else {
       WriteBitcodeToFile(M, *BcDmpDst);
       BcDmpDst->close();
-      SAYF("Write Bitcode to %s", BcDmpPth.c_str());
+      SAYF("Write Bitcode to %s\n", BcDmpPth.c_str());
     }
   }
 }
@@ -130,7 +130,7 @@ PreservedAnalyses SVFAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
 
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
-    SAYF(cCYA "SVF Analysis Pass" cBRI VERSION cRST " :)\n");
+    SAYF(cYEL "SVF Analysis Pass" cRST " :)\n");
 
   } else be_quiet = 1;
 
@@ -193,7 +193,7 @@ PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
 
   if (getenv("SVF_DUMP_BC")) {
 
-    SAYF("SVF_DUMP_BC set, exit AFLCoverage");
+    SAYF("SVF_DUMP_BC set, exit AFLCoverage\n");
     return PreservedAnalyses::all(); // no thing changed
 
   }

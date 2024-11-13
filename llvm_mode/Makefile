@@ -23,7 +23,7 @@ BIN_PATH     = $(PREFIX)/bin
 VERSION     = $(shell grep '^\#define VERSION ' ../config.h | cut -d '"' -f2)
 
 override LLVM_TOO_NEW_DEFAULT := 18
-override LLVM_TOO_OLD_DEFAULT := 6
+override LLVM_TOO_OLD_DEFAULT := 9
 
 LLVM_CONFIG ?= llvm-config
 
@@ -74,9 +74,8 @@ ifeq "$(shell test -e $(CC) || echo 1 )" "1"
       # we found one in the local install directory, lets use these
       CC         = $(BIN_DIR)/clang
     else
-      # hope for the best
-      $(warning we have trouble finding clang - llvm-config is not helping us)
-      CC         = clang
+      # raise
+      $(error we have trouble finding clang - llvm-config is not helping us)
     endif
   endif
 endif
@@ -89,9 +88,8 @@ ifeq "$(shell test -e $(CXX) || echo 1 )" "1"
       # we found one in the local install directory, lets use these
       CXX        = $(BIN_DIR)/clang++
     else
-      # hope for the best
-      $(warning we have trouble finding clang++ - llvm-config is not helping us)
-      CXX        = clang++
+      # raise
+      $(error we have trouble finding clang++ - llvm-config is not helping us)
     endif
   endif
 endif
@@ -129,16 +127,16 @@ else
   $(error clang option -flto is not working - maybe LLVMgold.so not found - cannot enable LTO mode)
 endif
 
-ifeq "$(shell echo 'int main() {return 0; }' | $(CLANG_BIN) -x c - -fuse-ld=$$(command -v ld) -o .test 2>/dev/null && echo 1 || echo 0 ; rm -f .test )" "1"
+ifeq "$(shell echo 'int main() {return 0; }' | $(CC) -x c - -fuse-ld=$$(command -v ld) -o .test 2>/dev/null && echo 1 || echo 0 ; rm -f .test )" "1"
   AFL_CLANG_FUSELD=1
-  ifeq "$(shell echo 'int main() {return 0; }' | $(CLANG_BIN) -x c - -fuse-ld=ld.lld --ld-path=$(AFL_REAL_LD) -o .test 2>/dev/null && echo 1 || echo 0 ; rm -f .test )" "1"
+  ifeq "$(shell echo 'int main() {return 0; }' | $(CC) -x c - -fuse-ld=ld.lld --ld-path=$(AFL_REAL_LD) -o .test 2>/dev/null && echo 1 || echo 0 ; rm -f .test )" "1"
     AFL_CLANG_LDPATH=1
   endif
 else
   $(error -fuse-ld is not working, cannot enable LTO mode)
 endif
 
-ifeq "$(shell echo 'int main() {return 0; }' | $(CLANG_BIN) -x c - -fdebug-prefix-map=$(CURDIR)=llvm_mode -o .test 2>/dev/null && echo 1 || echo 0 ; rm -f .test )" "1"
+ifeq "$(shell echo 'int main() {return 0; }' | $(CC) -x c - -fdebug-prefix-map=$(CURDIR)=llvm_mode -o .test 2>/dev/null && echo 1 || echo 0 ; rm -f .test )" "1"
         AFL_CLANG_DEBUG_PREFIX = -fdebug-prefix-map="$(CURDIR)=llvm_mode"
 else
         AFL_CLANG_DEBUG_PREFIX =
@@ -171,21 +169,21 @@ PROGS      = ../afl-clang-fast ../afl-llvm-pass.so ../afl-llvm-rt.o ../afl-llvm-
 
 all: $(PROGS) all_done
 
-../afl-clang-fast: afl-clang-fast.c | test_deps
+../afl-clang-fast: afl-clang-fast.c
 	$(CC) $(CFLAGS) $< -o $@ -DLLVM_MINOR=$(LLVM_MINOR) -DLLVM_MAJOR=$(LLVM_MAJOR) $(LDFLAGS)
 	ln -sf afl-clang-fast ../afl-clang-fast++
 
-../afl-llvm-pass.so: afl-llvm-pass.so.cc | test_deps
+../afl-llvm-pass.so: afl-llvm-pass.so.cc
 	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
 
-../afl-llvm-rt.o: afl-llvm-rt.o.c | test_deps
+../afl-llvm-rt.o: afl-llvm-rt.o.c
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
-../afl-llvm-rt-32.o: afl-llvm-rt.o.c | test_deps
+../afl-llvm-rt-32.o: afl-llvm-rt.o.c
 	@printf "[*] Building 32-bit variant of the runtime (-m32)... "
 	@$(CC) $(CFLAGS) -m32 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
-../afl-llvm-rt-64.o: afl-llvm-rt.o.c | test_deps
+../afl-llvm-rt-64.o: afl-llvm-rt.o.c
 	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
 	@$(CC) $(CFLAGS) -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 

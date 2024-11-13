@@ -25,7 +25,7 @@ VERSION     = $(shell grep '^\#define VERSION ' ../config.h | cut -d '"' -f2)
 override LLVM_TOO_NEW_DEFAULT := 18
 override LLVM_TOO_OLD_DEFAULT := 11
 
-LLVM_CONFIG ?= llvm-config
+LLVM_CONFIG ?= llvm-config-16
 
 override LLVM_RAW_VER := $(shell $(LLVM_CONFIG) --version 2>/dev/null)
 LLVMVER               := $(subst svn,,$(subst git,,$(LLVM_RAW_VER)))

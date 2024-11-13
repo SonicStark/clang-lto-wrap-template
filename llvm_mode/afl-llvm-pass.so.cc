@@ -39,17 +39,11 @@
 #include <unistd.h>
 
 #include "llvm/Config/llvm-config.h"
-#if LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR < 5
-typedef long double max_align_t;
-#endif
-
-#if LLVM_VERSION_MAJOR >= 16
 #include <optional>
 // None becomes deprecated
 // the standard std::nullopt_t is recommended instead
 // from C++17 and onwards.
 constexpr std::nullopt_t None = std::nullopt;
-#endif
 
 #include "llvm/Pass.h"
 
@@ -57,28 +51,23 @@ constexpr std::nullopt_t None = std::nullopt;
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/LegacyPassManager.h"
-#if LLVM_VERSION_MAJOR < 17
-  #include "llvm/Transforms/IPO/PassManagerBuilder.h"
-#endif
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
-
-#if LLVM_VERSION_MAJOR >= 4 || \
-    (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR > 4)
-  #include "llvm/IR/DebugInfo.h"
-  #include "llvm/IR/CFG.h"
-#else
-  #include "llvm/DebugInfo.h"
-  #include "llvm/Support/CFG.h"
-#endif
+#include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/CFG.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 
 using namespace llvm;
+
+#if LLVM_VERSION_MAJOR != 16
+  #error Designed only for llvm 16
+#endif
 
 namespace {
 
@@ -91,30 +80,24 @@ namespace {
   
   };
 
-  class AFLCoverageLegacy : public ModulePass {
+  class SVFAnalysis : public PassInfoMixin<SVFAnalysis> {
 
     public:
+      SVFAnalysis() {}
 
-      static char ID;
-      AFLCoverageLegacy() : ModulePass(ID) { }
+      PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 
-      bool runOnModule(Module &M) override;
-
-      StringRef getPassName() const override {
-        return "American Fuzzy Lop Instrumentation";
-      }
-
+      void DumpBC(Module &M);
+  
   };
 
 }
 
-void AFLDumpBC(Module &M) {
+void SVFAnalysis::DumpBC(Module &M) {
 
   char *ptr;
 
-  if (!getenv("AFL_LTO_ENABLE")) return;
-
-  if ((ptr = getenv("AFL_DUMP_BC")) != NULL) {
+  if ((ptr = getenv("SVF_DUMP_BC")) != NULL) {
     std::string BcDmpPth(ptr);
     BcDmpPth += ".";
     BcDmpPth += M.getSourceFileName().substr(0,16);
@@ -129,11 +112,70 @@ void AFLDumpBC(Module &M) {
     } else {
       WriteBitcodeToFile(M, *BcDmpDst);
       BcDmpDst->close();
+      SAYF("Write Bitcode to %s", BcDmpPth.c_str());
     }
   }
 }
 
-void AFLInjectCov(Module &M) {
+PreservedAnalyses SVFAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
+
+  LLVMContext &C = M.getContext();
+
+  IntegerType *Int8Ty  = IntegerType::getInt8Ty(C);
+  IntegerType *Int32Ty = IntegerType::getInt32Ty(C);
+
+  /* Show a banner */
+
+  char be_quiet = 0;
+
+  if (isatty(2) && !getenv("AFL_QUIET")) {
+
+    SAYF(cCYA "SVF Analysis Pass" cBRI VERSION cRST " :)\n");
+
+  } else be_quiet = 1;
+
+  if (!getenv("AFL_LTO_ENABLE")) {
+
+    if (!be_quiet)
+      { WARNF("AFL_LTO_ENABLE not set"); }
+    
+    return PreservedAnalyses::all(); // no thing changed
+
+  }
+  
+  if (getenv("SVF_DUMP_BC")) {
+
+    DumpBC(M);
+    return PreservedAnalyses::all(); // no thing changed
+
+  }
+
+  unsigned int cnt_bb = 0;
+  unsigned int cnt_func = 0;
+  
+  for (auto &F : M) {
+
+    SAYF("SVF Analysis: %s\n", F.getName().str().c_str());
+
+    ++cnt_func;
+
+    for (auto &BB : F) {
+
+      ++cnt_bb;
+
+    }
+
+  }
+
+  if (!be_quiet)
+    { SAYF("SVF Analysis: cnt_bb=%u, cnt_func=%u\n", cnt_bb, cnt_func); }
+
+  return PreservedAnalyses();
+
+}
+
+PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
+
   LLVMContext &C = M.getContext();
 
   IntegerType *Int8Ty  = IntegerType::getInt8Ty(C);
@@ -149,7 +191,12 @@ void AFLInjectCov(Module &M) {
 
   } else be_quiet = 1;
 
-  AFLDumpBC(M);
+  if (getenv("SVF_DUMP_BC")) {
+
+    SAYF("SVF_DUMP_BC set, exit AFLCoverage");
+    return PreservedAnalyses::all(); // no thing changed
+
+  }
 
   /* Decide instrumentation ratio */
 
@@ -179,7 +226,10 @@ void AFLInjectCov(Module &M) {
 
   int inst_blocks = 0;
 
-  for (auto &F : M)
+  for (auto &F : M) {
+
+    if (F.getName().contains("__afl_svf_")) continue;
+
     for (auto &BB : F) {
 
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
@@ -195,36 +245,19 @@ void AFLInjectCov(Module &M) {
 
       /* Load prev_loc */
 
-      LoadInst *PrevLoc = IRB.CreateLoad(
-#if LLVM_VERSION_MAJOR >= 14
-          IRB.getInt32Ty(),
-#endif
-          AFLPrevLoc);
+      LoadInst *PrevLoc = IRB.CreateLoad(IRB.getInt32Ty(), AFLPrevLoc);
       PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());
 
       /* Load SHM pointer */
 
-      LoadInst *MapPtr = IRB.CreateLoad(
-#if LLVM_VERSION_MAJOR >= 14
-          PointerType::get(Int8Ty, 0),
-#endif
-          AFLMapPtr);
+      LoadInst *MapPtr = IRB.CreateLoad(PointerType::get(Int8Ty, 0), AFLMapPtr);
       MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-      Value *MapPtrIdx =
-          IRB.CreateGEP(
-#if LLVM_VERSION_MAJOR >= 14
-            Int8Ty,
-#endif
-            MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
+      Value *MapPtrIdx = IRB.CreateGEP(Int8Ty, MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
 
       /* Update bitmap */
 
-      LoadInst *Counter = IRB.CreateLoad(
-#if LLVM_VERSION_MAJOR >= 14
-          IRB.getInt8Ty(),
-#endif
-          MapPtrIdx);
+      LoadInst *Counter = IRB.CreateLoad(IRB.getInt8Ty(), MapPtrIdx);
       Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *Incr = IRB.CreateAdd(Counter, ConstantInt::get(Int8Ty, 1));
       IRB.CreateStore(Incr, MapPtrIdx)
@@ -239,6 +272,7 @@ void AFLInjectCov(Module &M) {
       inst_blocks++;
 
     }
+  }
 
   /* Say something nice. */
 
@@ -251,9 +285,11 @@ void AFLInjectCov(Module &M) {
               "ASAN/MSAN" : "non-hardened"), inst_ratio);
 
   }
+
+  return PreservedAnalyses();
+
 }
 
-#if LLVM_VERSION_MAJOR >= 11
 extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
 llvmGetPassPluginInfo() {
 
@@ -261,66 +297,18 @@ llvmGetPassPluginInfo() {
           /* lambda to insert our pass into the pass pipeline. */
           [](PassBuilder &PB) {
 
-    #if LLVM_VERSION_MAJOR <= 13
-            using OptimizationLevel = typename PassBuilder::OptimizationLevel;
-    #endif
             auto AFLCallback = [](ModulePassManager &MPM, OptimizationLevel OL) {
 
                                   MPM.addPass(AFLCoverage());
 
                                 };
-            if (!getenv("AFL_LTO_ENABLE"))
-              { PB.registerOptimizerLastEPCallback(AFLCallback); }
-            else
-    #if LLVM_VERSION_MAJOR >= 15
-              { PB.registerFullLinkTimeOptimizationLastEPCallback(AFLCallback); }
-    #else
-              {
-                // 11-14 don't have EPCallback for full LTO, and OptimizerLastEP can't 
-                // register either. So we have to use the legacy pass manager...
-              }
-    #endif
+            auto SVFCallback = [](ModulePassManager &MPM, OptimizationLevel OL) {
+
+                                  MPM.addPass(SVFAnalysis());
+
+                                };
+            PB.registerFullLinkTimeOptimizationEarlyEPCallback(SVFCallback);
+            PB.registerFullLinkTimeOptimizationLastEPCallback(AFLCallback);
           }};
 
 }
-
-PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
-
-  AFLInjectCov(M);
-
-  return PreservedAnalyses();
-
-}
-#endif
-
-bool AFLCoverageLegacy::runOnModule(Module &M) {
-
-  AFLInjectCov(M);
-
-  return true;
-
-}
-
-char AFLCoverageLegacy::ID = 0;
-
-#if LLVM_VERSION_MAJOR <= 14
-
-static void registerAFLPass(const PassManagerBuilder &,
-                            legacy::PassManagerBase &PM) {
-
-  PM.add(new AFLCoverageLegacy());
-
-}
-
-  #if LLVM_VERSION_MAJOR >=9
-
-static RegisterStandardPasses RegisterAFLPassLTO(
-    PassManagerBuilder::EP_FullLinkTimeOptimizationLast, registerAFLPass);
-
-  #else
-    #error "There is no extension point for LTO passes before llvm 9 (https://reviews.llvm.org/D61738)"
-  #endif
-  #if LLVM_VERSION_MAJOR < 11
-    #error "ld.lld before 11 do not support '-mllvm=-load=...'"
-  #endif
-#endif

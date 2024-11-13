@@ -44,6 +44,7 @@ typedef long double max_align_t;
 #endif
 
 #if LLVM_VERSION_MAJOR >= 16
+#include <optional>
 // None becomes deprecated
 // the standard std::nullopt_t is recommended instead
 // from C++17 and onwards.
@@ -52,12 +53,11 @@ constexpr std::nullopt_t None = std::nullopt;
 
 #include "llvm/Pass.h"
 
-#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
-  #include "llvm/Passes/PassPlugin.h"
-  #include "llvm/Passes/PassBuilder.h"
-  #include "llvm/IR/PassManager.h"
-#else
-  #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/IR/LegacyPassManager.h"
+#if LLVM_VERSION_MAJOR < 17
   #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #endif
 
@@ -82,7 +82,6 @@ using namespace llvm;
 
 namespace {
 
-#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
   class AFLCoverage : public PassInfoMixin<AFLCoverage> {
 
     public:
@@ -92,85 +91,49 @@ namespace {
   
   };
 
-#else
-  class AFLCoverage : public ModulePass {
+  class AFLCoverageLegacy : public ModulePass {
 
     public:
 
       static char ID;
-      AFLCoverage() : ModulePass(ID) { }
+      AFLCoverageLegacy() : ModulePass(ID) { }
 
       bool runOnModule(Module &M) override;
 
-      // StringRef getPassName() const override {
-      //  return "American Fuzzy Lop Instrumentation";
-      // }
-
-  };
-#endif
-
-  void AFLDumpBC(Module &M) {
-
-    char *ptr;
-
-    if ((ptr = getenv("AFL_DUMP_BC")) != NULL) {
-      std::string BcDmpPth(ptr);
-      BcDmpPth += ".";
-      BcDmpPth += M.getSourceFileName().substr(0,8);
-      BcDmpPth += ".";
-      BcDmpPth += std::to_string((unsigned int)getpid());
-      BcDmpPth += ".bc";
-      std::error_code ec_;
-      std::unique_ptr<raw_fd_ostream> BcDmpDst = 
-        std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, 0);
-    
-      if (ec_) {
-        WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
-      } else {
-        WriteBitcodeToFile(M, *BcDmpDst);
-        BcDmpDst->close();
+      StringRef getPassName() const override {
+        return "American Fuzzy Lop Instrumentation";
       }
-    }
+
   };
 
 }
 
+void AFLDumpBC(Module &M) {
 
-#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
-extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
-llvmGetPassPluginInfo() {
+  char *ptr;
 
-  return {LLVM_PLUGIN_API_VERSION, "AFLCoverage", "v0.1",
-          /* lambda to insert our pass into the pass pipeline. */
-          [](PassBuilder &PB) {
+  if (!getenv("AFL_LTO_ENABLE")) return;
 
-    #if LLVM_VERSION_MAJOR <= 13
-            using OptimizationLevel = typename PassBuilder::OptimizationLevel;
-    #endif
-            PB.registerOptimizerLastEPCallback(
-                [](ModulePassManager &MPM, OptimizationLevel OL) {
-
-                  MPM.addPass(AFLCoverage());
-
-                });
-
-          }};
-
+  if ((ptr = getenv("AFL_DUMP_BC")) != NULL) {
+    std::string BcDmpPth(ptr);
+    BcDmpPth += ".";
+    BcDmpPth += M.getSourceFileName().substr(0,16);
+    BcDmpPth += ".";
+    BcDmpPth += std::to_string((unsigned int)getpid());
+    BcDmpPth += ".bc";
+    std::error_code ec_;
+    std::unique_ptr<raw_fd_ostream> BcDmpDst = 
+      std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, (sys::fs::OpenFlags) 0);
+    if (ec_) {
+      WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
+    } else {
+      WriteBitcodeToFile(M, *BcDmpDst);
+      BcDmpDst->close();
+    }
+  }
 }
 
-#else
-
-char AFLCoverage::ID = 0;
-#endif
-
-#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
-PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
-
-#else
-bool AFLCoverage::runOnModule(Module &M) {
-
-#endif
-
+void AFLInjectCov(Module &M) {
   LLVMContext &C = M.getContext();
 
   IntegerType *Int8Ty  = IntegerType::getInt8Ty(C);
@@ -288,26 +251,76 @@ bool AFLCoverage::runOnModule(Module &M) {
               "ASAN/MSAN" : "non-hardened"), inst_ratio);
 
   }
+}
 
-#if LLVM_VERSION_MAJOR >= 11                        /* use new pass manager */
-  return PreservedAnalyses();
-#else
-  return true;
-#endif
+#if LLVM_VERSION_MAJOR >= 11
+extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+llvmGetPassPluginInfo() {
+
+  return {LLVM_PLUGIN_API_VERSION, "AFLCoverage", "v0.1",
+          /* lambda to insert our pass into the pass pipeline. */
+          [](PassBuilder &PB) {
+
+    #if LLVM_VERSION_MAJOR <= 13
+            using OptimizationLevel = typename PassBuilder::OptimizationLevel;
+    #endif
+            auto AFLCallback = [](ModulePassManager &MPM, OptimizationLevel OL) {
+
+                                  MPM.addPass(AFLCoverage());
+
+                                };
+            if (!getenv("AFL_LTO_ENABLE"))
+              { PB.registerOptimizerLastEPCallback(AFLCallback); }
+            else
+    #if LLVM_VERSION_MAJOR >= 15
+              { PB.registerFullLinkTimeOptimizationLastEPCallback(AFLCallback); }
+    #else
+              {
+                // 11-14 don't have EPCallback for full LTO, and OptimizerLastEP can't 
+                // register either. So we have to use the legacy pass manager...
+              }
+    #endif
+          }};
 
 }
 
-#if LLVM_VERSION_MAJOR < 11                         /* use old pass manager */
+PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
+
+  AFLInjectCov(M);
+
+  return PreservedAnalyses();
+
+}
+#endif
+
+bool AFLCoverageLegacy::runOnModule(Module &M) {
+
+  AFLInjectCov(M);
+
+  return true;
+
+}
+
+char AFLCoverageLegacy::ID = 0;
+
+#if LLVM_VERSION_MAJOR <= 14
+
 static void registerAFLPass(const PassManagerBuilder &,
                             legacy::PassManagerBase &PM) {
 
-  PM.add(new AFLCoverage());
+  PM.add(new AFLCoverageLegacy());
 
 }
 
-static RegisterStandardPasses RegisterAFLPass(
-    PassManagerBuilder::EP_ModuleOptimizerEarly, registerAFLPass);
+  #if LLVM_VERSION_MAJOR >=9
 
-static RegisterStandardPasses RegisterAFLPass0(
-    PassManagerBuilder::EP_EnabledOnOptLevel0, registerAFLPass);
+static RegisterStandardPasses RegisterAFLPassLTO(
+    PassManagerBuilder::EP_FullLinkTimeOptimizationLast, registerAFLPass);
+
+  #else
+    #error "There is no extension point for LTO passes before llvm 9 (https://reviews.llvm.org/D61738)"
+  #endif
+  #if LLVM_VERSION_MAJOR < 11
+    #error "ld.lld before 11 do not support '-mllvm=-load=...'"
+  #endif
 #endif

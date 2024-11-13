@@ -181,7 +181,7 @@ static void edit_params(u32 argc, char** argv) {
       if (!*ld_path) {
 
         ck_free(ld_path);
-        ld_path = strdup("ld.lld");
+        ld_path = ck_strdup("ld.lld");
 
       }
 
@@ -190,7 +190,7 @@ static void edit_params(u32 argc, char** argv) {
 #else
       cc_params[cc_par_cnt++] = alloc_printf("-fuse-ld=%s", ld_path);
 #endif
-      free(ld_path);
+      ck_free(ld_path);
 
       /* load passes for LTO */
 

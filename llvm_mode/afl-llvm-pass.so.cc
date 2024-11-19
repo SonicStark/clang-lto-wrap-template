@@ -158,27 +158,48 @@ namespace {
 
 void AFLDumpBC(Module &M) {
 
-  char *ptr;
+  std::string BcDmpPth;
 
   if (!getenv("AFL_LTO_ENABLE")) return;
 
-  if ((ptr = getenv("AFL_DUMP_BC")) != NULL) {
-    std::string BcDmpPth(ptr);
+  char *ptr = getenv("AFL_DUMP_BC");
+  if (!ptr) return;
+
+  // AFL_DUMP_BC=""
+  if (*ptr == '\0') {
+
+    ptr = getenv("AFL_OUTPUT_NAME");
+    if (!ptr) return;
+
+    BcDmpPth = ptr;
+
+  } else {
+
+    BcDmpPth = ptr;
     BcDmpPth += ".";
-    BcDmpPth += M.getSourceFileName().substr(0,16);
-    BcDmpPth += ".";
-    BcDmpPth += std::to_string((unsigned int)getpid());
-    BcDmpPth += ".bc";
-    std::error_code ec_;
-    std::unique_ptr<raw_fd_ostream> BcDmpDst = 
-      std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, (sys::fs::OpenFlags) 0);
-    if (ec_) {
-      WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
+
+    if ((ptr = getenv("AFL_OUTPUT_NAME")) != NULL) {
+      BcDmpPth += ptr;
     } else {
-      WriteBitcodeToFile(M, *BcDmpDst);
-      BcDmpDst->close();
+      BcDmpPth += M.getSourceFileName().substr(0,16);
     }
+
   }
+
+  BcDmpPth += ".";
+  BcDmpPth += std::to_string((unsigned int)getpid());
+  BcDmpPth += ".bc";
+
+  std::error_code ec_;
+  std::unique_ptr<raw_fd_ostream> BcDmpDst = 
+    std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, (sys::fs::OpenFlags) 0);
+  if (ec_) {
+    WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
+  } else {
+    WriteBitcodeToFile(M, *BcDmpDst);
+    BcDmpDst->close();
+  }
+
 }
 
 void AFLInjectCov(Module &M) {

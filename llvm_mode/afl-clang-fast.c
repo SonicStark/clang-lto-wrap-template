@@ -48,6 +48,46 @@ static u8  *lto_flag;
 static u8   lto_mode = 0;           /* If LTO mode used                  */
 static u8   lto_save_temps = 0;     /* If use --save-temps in LTO mode   */
 
+/* Try to set output name when "-o" detected, to help AFL_DUMP_BC */
+
+static void set_output_name(u8 *this_argv, u8 *next_argv) {
+
+  u8 *mn = this_argv + 2;
+
+  if (*mn == '\0') {
+
+    if (!next_argv) { return; }
+
+    mn = next_argv;
+
+  }
+
+  u8 *mn_tmp = getenv("AFL_DUMP_BC");
+
+  // AFL_DUMP_BC=""
+  if (mn_tmp && (*mn_tmp == '\0')) {
+
+    setenv("AFL_OUTPUT_NAME", mn, 0);
+    return;
+
+  }
+
+  if ((mn_tmp = strrchr(mn, '/')) != NULL) {
+
+    ++mn_tmp;
+  
+  } else {
+
+    mn_tmp = mn;
+
+  }
+
+  if (*mn_tmp == '\0') { return; }
+
+  setenv("AFL_OUTPUT_NAME", mn_tmp, 1);
+
+}
+
 /* Try to find the runtime libraries. If that fails, abort. */
 
 static void find_obj(u8* argv0) {
@@ -152,6 +192,10 @@ static void edit_params(u32 argc, char** argv) {
         !strcmp(cur, "-fsanitize=memory")) asan_set = 1;
 
     if (strstr(cur, "FORTIFY_SOURCE")) fortify_set = 1;
+
+    if (lto_mode && !strncmp(cur, "-o", 2)) {
+      set_output_name(cur, (argv_cp+1) ? *(argv_cp+1) : "");
+    }
 
   }
 

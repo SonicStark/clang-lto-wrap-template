@@ -353,6 +353,52 @@ PreservedAnalyses ModuleSanitizerCoverageLTO::run(Module                &M,
   ==== CLANG-LTO-WRAP ====
   instrumentModule
 */
+
+void AFLDumpBC(Module &M) {
+
+  std::string BcDmpPth;
+
+  char *ptr = getenv("AFL_DUMP_BC");
+
+  if (!ptr) return;
+
+  // AFL_DUMP_BC=""
+  if (*ptr == '\0') {
+
+    ptr = getenv("AFL_OUTPUT_NAME");
+    if (!ptr) return;
+
+    BcDmpPth = ptr;
+
+  } else {
+
+    BcDmpPth = ptr;
+    BcDmpPth += ".";
+
+    if ((ptr = getenv("AFL_OUTPUT_NAME")) != NULL) {
+      BcDmpPth += ptr;
+    } else {
+      BcDmpPth += M.getSourceFileName().substr(0,16);
+    }
+
+  }
+
+  BcDmpPth += ".";
+  BcDmpPth += std::to_string((unsigned int)getpid());
+  BcDmpPth += ".bc";
+
+  std::error_code ec_;
+  std::unique_ptr<raw_fd_ostream> BcDmpDst = 
+    std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, (sys::fs::OpenFlags) 0);
+  if (ec_) {
+    WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
+  } else {
+    WriteBitcodeToFile(M, *BcDmpDst);
+    BcDmpDst->close();
+  }
+
+}
+
 bool ModuleSanitizerCoverageLTO::instrumentModule(
     Module &M, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback) {
 
@@ -387,27 +433,7 @@ bool ModuleSanitizerCoverageLTO::instrumentModule(
   Int64Tyi = IntegerType::getInt64Ty(Ctx);
 
   /* Save the bc before this pass applied */
-  if ((ptr = getenv("AFL_DUMP_BC")) != NULL) {
-
-    std::string BcDmpPth(ptr);
-    BcDmpPth += ".";
-    BcDmpPth += M.getSourceFileName().substr(0,8);
-    BcDmpPth += ".";
-    BcDmpPth += std::to_string((unsigned int)getpid());
-    BcDmpPth += ".bc";
-
-    std::error_code ec_;
-    std::unique_ptr<raw_fd_ostream> BcDmpDst = 
-      std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, sys::fs::OF_None);
-    
-    if (ec_) {
-      WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
-    } else {
-      WriteBitcodeToFile(M, *BcDmpDst);
-      BcDmpDst->close();
-    }
-
-  }
+  AFLDumpBC(M);
 
   /* Show a banner */
   setvbuf(stdout, NULL, _IONBF, 0);

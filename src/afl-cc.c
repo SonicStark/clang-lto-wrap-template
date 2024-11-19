@@ -199,6 +199,45 @@ u8 *find_object(aflcc_state_t *, u8 *obj);
 
 void find_built_deps(aflcc_state_t *);
 
+/* Try to set output name when "-o" detected, to help AFL_DUMP_BC */
+static inline void set_output_name(u8 *this_argv, u8 *next_argv) {
+
+  u8 *mn = this_argv + 2;
+
+  if (*mn == '\0') {
+
+    if (!next_argv) { return; }
+
+    mn = next_argv;
+
+  }
+
+  u8 *mn_tmp = getenv("AFL_DUMP_BC");
+
+  // AFL_DUMP_BC=""
+  if (mn_tmp && (*mn_tmp == '\0')) {
+
+    setenv("AFL_OUTPUT_NAME", mn, 0);
+    return;
+
+  }
+
+  if ((mn_tmp = strrchr(mn, '/')) != NULL) {
+
+    ++mn_tmp;
+  
+  } else {
+
+    mn_tmp = mn;
+
+  }
+
+  if (*mn_tmp == '\0') { return; }
+
+  setenv("AFL_OUTPUT_NAME", mn_tmp, 1);
+
+}
+
 /* Insert param into the new argv, raise error if MAX_PARAMS_NUM exceeded. */
 static inline void insert_param(aflcc_state_t *aflcc, u8 *param) {
 
@@ -1168,7 +1207,20 @@ param_st parse_linking_params(aflcc_state_t *aflcc, u8 *cur_argv, u8 scan,
 
     }
 
-  }
+  } else if (!strncmp(cur_argv, "-o", 2)) {
+
+    if (scan) {
+
+      set_output_name(cur_argv, (argv+1) ? *(argv+1) : "");
+      final_ = PARAM_SCAN;
+
+    } else {
+
+      final_ = PARAM_KEEP;
+
+    }
+
+  } 
 
   // Try to warn user for some unsupported cases
   if (scan && final_ == PARAM_MISS) {

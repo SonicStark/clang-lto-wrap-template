@@ -91,30 +91,93 @@ namespace {
   
   };
 
+  class FuncFilter {
+
+    public:
+
+      FuncFilter() {}
+
+      static bool IsDefaultIgnore(Function &F) {
+
+        if (F.empty())
+          return true;
+
+        if (F.getName().contains(".module_ctor"))
+          return true;  // Should not instrument sanitizer init functions.
+
+        if (F.getName().startswith("__sanitizer_"))
+          return true;  // Don't instrument __sanitizer_* callbacks.
+
+        // Don't touch available_externally functions, their actual body is elsewhere.
+        if (F.getLinkage() == GlobalValue::AvailableExternallyLinkage)
+          return true;
+
+        // Don't instrument MSVC CRT configuration helpers. They may run before normal
+        // initialization.
+        if (F.getName() == "__local_stdio_printf_options" ||
+            F.getName() == "__local_stdio_scanf_options")
+          return true;
+
+        if (isa<UnreachableInst>(F.getEntryBlock().getTerminator()))
+          return true;
+
+        if (F.hasFnAttribute(Attribute::NoSanitizeCoverage))
+          return true;
+
+        if (!F.size())
+          return true;
+
+      return false;
+
+      }
+
+  };
+
 }
 
 void SVFAnalysis::DumpBC(Module &M) {
 
-  char *ptr;
+  std::string BcDmpPth;
 
-  if ((ptr = getenv("SVF_DUMP_BC")) != NULL) {
-    std::string BcDmpPth(ptr);
+  char *ptr = getenv("SVF_DUMP_BC");
+  if (!ptr) return;
+
+  // SVF_DUMP_BC=""
+  if (*ptr == '\0') {
+
+    ptr = getenv("SVF_OUTPUT_NAME");
+    if (!ptr) return;
+
+    BcDmpPth = ptr;
+
+  } else {
+
+    BcDmpPth = ptr;
     BcDmpPth += ".";
-    BcDmpPth += M.getSourceFileName().substr(0,16);
-    BcDmpPth += ".";
-    BcDmpPth += std::to_string((unsigned int)getpid());
-    BcDmpPth += ".bc";
-    std::error_code ec_;
-    std::unique_ptr<raw_fd_ostream> BcDmpDst = 
-      std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, (sys::fs::OpenFlags) 0);
-    if (ec_) {
-      WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
+
+    if ((ptr = getenv("SVF_OUTPUT_NAME")) != NULL) {
+      BcDmpPth += ptr;
     } else {
-      WriteBitcodeToFile(M, *BcDmpDst);
-      BcDmpDst->close();
-      SAYF("Write Bitcode to %s\n", BcDmpPth.c_str());
+      BcDmpPth += M.getSourceFileName().substr(0,16);
     }
+
   }
+
+  BcDmpPth += ".";
+  BcDmpPth += std::to_string((unsigned int)getpid());
+  BcDmpPth += ".bc";
+
+  std::error_code ec_;
+  std::unique_ptr<raw_fd_ostream> BcDmpDst = 
+    std::make_unique<raw_fd_ostream>(BcDmpPth, ec_, (sys::fs::OpenFlags) 0);
+  if (ec_) {
+    WARNF("Cannot access bc dump path %s", BcDmpPth.c_str());
+  } else {
+    WriteBitcodeToFile(M, *BcDmpDst);
+    BcDmpDst->close();
+    OKF("Dump bitcode: %s", BcDmpPth.c_str());
+  }
+
 }
 
 PreservedAnalyses SVFAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
@@ -152,10 +215,11 @@ PreservedAnalyses SVFAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
 
   unsigned int cnt_bb = 0;
   unsigned int cnt_func = 0;
-  
+
   for (auto &F : M) {
 
-    SAYF("SVF Analysis: %s\n", F.getName().str().c_str());
+    if (FuncFilter::IsDefaultIgnore(F)) continue;
+    OKF("SVF Analysis: %s", F.getName().str().c_str());
 
     ++cnt_func;
 
@@ -168,7 +232,7 @@ PreservedAnalyses SVFAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
   }
 
   if (!be_quiet)
-    { SAYF("SVF Analysis: cnt_bb=%u, cnt_func=%u\n", cnt_bb, cnt_func); }
+    { OKF("SVF Analysis: cnt_bb=%u, cnt_func=%u", cnt_bb, cnt_func); }
 
   return PreservedAnalyses();
 
@@ -187,13 +251,13 @@ PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
 
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
-    SAYF(cCYA "afl-llvm-pass " cBRI VERSION cRST " by <lszekeres@google.com>\n");
+    SAYF(cYEL "AFL Coverage Pass" cRST " :)\n");
 
   } else be_quiet = 1;
 
   if (getenv("SVF_DUMP_BC")) {
 
-    SAYF("SVF_DUMP_BC set, exit AFLCoverage\n");
+    OKF("SVF_DUMP_BC set, exit AFLCoverage");
     return PreservedAnalyses::all(); // no thing changed
 
   }
@@ -228,7 +292,8 @@ PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
 
   for (auto &F : M) {
 
-    if (F.getName().contains("__afl_svf_")) continue;
+    if (F.getName().startswith("__afl_svf_")) continue;
+    if (FuncFilter::IsDefaultIgnore(F)) continue;
 
     for (auto &BB : F) {
 

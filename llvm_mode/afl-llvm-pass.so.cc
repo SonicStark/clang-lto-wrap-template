@@ -127,7 +127,7 @@ namespace {
         if (!F.size())
           return true;
 
-      return false;
+        return false;
 
       }
 
@@ -197,21 +197,24 @@ PreservedAnalyses SVFAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
 
   } else be_quiet = 1;
 
-  if (!getenv("AFL_LTO_ENABLE")) {
+  if (getenv("AFL_LTO_ENABLE")) {
 
-    if (!be_quiet)
-      { WARNF("AFL_LTO_ENABLE not set"); }
-    
+    if (getenv("SVF_DUMP_BC")) {
+
+      OKF("Detect SVF_DUMP_BC in LTO mode");
+      DumpBC(M);
+
+    } else {
+
+      WARNF("Nothing to do in LTO mode, exit");
+
+    }
+
     return PreservedAnalyses::all(); // no thing changed
 
   }
-  
-  if (getenv("SVF_DUMP_BC")) {
 
-    DumpBC(M);
-    return PreservedAnalyses::all(); // no thing changed
-
-  }
+  OKF("SVF Analysis instrumentation begin");
 
   unsigned int cnt_bb = 0;
   unsigned int cnt_func = 0;
@@ -232,7 +235,7 @@ PreservedAnalyses SVFAnalysis::run(Module &M, ModuleAnalysisManager &MAM) {
   }
 
   if (!be_quiet)
-    { OKF("SVF Analysis: cnt_bb=%u, cnt_func=%u", cnt_bb, cnt_func); }
+    { OKF("Summary: cnt_bb=%u, cnt_func=%u", cnt_bb, cnt_func); }
 
   return PreservedAnalyses();
 
@@ -254,13 +257,6 @@ PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
     SAYF(cYEL "AFL Coverage Pass" cRST " :)\n");
 
   } else be_quiet = 1;
-
-  if (getenv("SVF_DUMP_BC")) {
-
-    OKF("SVF_DUMP_BC set, exit AFLCoverage");
-    return PreservedAnalyses::all(); // no thing changed
-
-  }
 
   /* Decide instrumentation ratio */
 
@@ -293,7 +289,6 @@ PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
   for (auto &F : M) {
 
     if (F.getName().startswith("__afl_svf_")) continue;
-    if (FuncFilter::IsDefaultIgnore(F)) continue;
 
     for (auto &BB : F) {
 
@@ -373,7 +368,8 @@ llvmGetPassPluginInfo() {
 
                                 };
             PB.registerFullLinkTimeOptimizationEarlyEPCallback(SVFCallback);
-            PB.registerFullLinkTimeOptimizationLastEPCallback(AFLCallback);
+            PB.registerPipelineStartEPCallback(SVFCallback);
+            PB.registerOptimizerEarlyEPCallback(AFLCallback);
           }};
 
 }

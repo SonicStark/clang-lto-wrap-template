@@ -106,6 +106,54 @@ namespace {
 
   };
 
+  class FuncFilter {
+
+    public:
+
+      FuncFilter() {}
+
+      static bool IsDefaultIgnore(Function &F) {
+
+        if (F.empty())
+          return true;
+
+        if (F.getName().contains(".module_ctor"))
+          return true;  // Should not instrument sanitizer init functions.
+
+#if LLVM_VERSION_MAJOR >= 18
+        if (F.getName().starts_with("__sanitizer_"))
+#else
+        if (F.getName().startswith("__sanitizer_"))
+#endif
+          return true;  // Don't instrument __sanitizer_* callbacks.
+
+        // Don't touch available_externally functions, their actual body is elsewhere.
+        if (F.getLinkage() == GlobalValue::AvailableExternallyLinkage)
+          return true;
+
+        // Don't instrument MSVC CRT configuration helpers. They may run before normal
+        // initialization.
+        if (F.getName() == "__local_stdio_printf_options" ||
+            F.getName() == "__local_stdio_scanf_options")
+          return true;
+
+        if (isa<UnreachableInst>(F.getEntryBlock().getTerminator()))
+          return true;
+
+        if (F.hasFnAttribute(Attribute::NoSanitizeCoverage))
+          return true;
+#if LLVM_VERSION_MAJOR >= 19
+        if (F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation))
+          return true;
+#endif
+
+        if (!F.size())
+          return true;
+
+      }
+
+  };
+
 }
 
 void AFLDumpBC(Module &M) {
@@ -179,7 +227,10 @@ void AFLInjectCov(Module &M) {
 
   int inst_blocks = 0;
 
-  for (auto &F : M)
+  for (auto &F : M) {
+
+    if (FuncFilter::IsDefaultIgnore(F)) continue;
+
     for (auto &BB : F) {
 
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
@@ -239,6 +290,8 @@ void AFLInjectCov(Module &M) {
       inst_blocks++;
 
     }
+
+  }
 
   /* Say something nice. */
 
